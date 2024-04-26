@@ -1,0 +1,74 @@
+[tool.poetry]
+name = "attention_analysis"
+version = "0.1.0"
+description = "Analysis of Attention Mechanism in Time Series Forecasting"
+authors = ["Jan Baljan <jan.baljan@hotmail.com>", "Farid Rasoolzadeh Baghmisheh <faridrb@student.ou.nl>"]
+readme = "README.md"
+packages = [{ include = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+numpy = "^1.26.4 "
+pandas = "^2.2.2"
+torch = "^2.2.2"
+matplotlib = "^3.8.4"
+jupyter = "^1.0.0"
+chardet = "^5.2.0"
+
+#torch = {version = "^2.2.0+cu121", source = "pytorch"}
+#
+#[[tool.poetry.source]]
+#name = "pytorch"
+#url = "https://download.pytorch.org/whl/cu121"
+#priority = "supplemental"
+
+[[tool.poetry.source]]
+name = "PyPI"
+priority = "primary"
+
+[tool.poetry.group.dev.dependencies]
+pre-commit = "^3.7.0"
+mypy = "^1.9.0"
+ruff = "^0.3.7"
+pytest-cov = "^4.1.0"
+pytest = "^8.0.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
+testpaths = ["tests"]
+addopts = ["--import-mode=importlib"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+#[tool.mypy]
+#exclude = ['tests/', 'scripts/']
+#ignore_missing_imports = true
+#follow_imports = "silent"
+#warn_redundant_casts = true
+#warn_unused_ignores = true
+#disallow_any_generics = false
+#check_untyped_defs = true
+#no_implicit_reexport = true
+
+[tool.ruff]
+line-length = 100
+indent-width = 4
+target-version = "py310"
+src = ["src"]
+extend-include = ["*.ipynb"]
+
+[tool.ruff.lint]
+extend-select = ["D", "W", "B", "Q"]
+unfixable = ["D", "B"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
