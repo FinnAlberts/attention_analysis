@@ -1,6 +1,13 @@
 
 data/**
 
+datasets/traffic
+
+datasets/tourism
+
+datasets/electricity
+
+.venv/
 *.pth
 
 # Byte-compiled / optimized / DLL files

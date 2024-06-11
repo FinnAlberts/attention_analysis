@@ -1,0 +1,9 @@
+numpy
+pandas
+torch
+matplotlib
+jupyter
+chardet
+fire
+patool
+tqdm
