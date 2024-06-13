@@ -45,7 +45,7 @@ class TrafficDataset:
         values = np.load(CACHE_FILE_PATH, allow_pickle=True)
         return TrafficDataset(
             ids=np.array(list(range(len(values)))),
-            values=values,
+            values=values.T,
             dates=np.load(DATES_CACHE_FILE_PATH, allow_pickle=True))
 
     def split_by_date(self, cut_date: str, include_cut_date: bool = True) -> Tuple['TrafficDataset', 'TrafficDataset']:
@@ -66,10 +66,10 @@ class TrafficDataset:
             else:
                 right_indices.append(i)
         return TrafficDataset(ids=self.ids,
-                              values=self.values[:, left_indices],
+                              values=self.values[left_indices],
                               dates=self.dates[left_indices]), \
                TrafficDataset(ids=self.ids,
-                              values=self.values[:, right_indices],
+                              values=self.values[right_indices],
                               dates=self.dates[right_indices])
 
     def split(self, cut_point: int) -> Tuple['TrafficDataset', 'TrafficDataset']:
@@ -81,10 +81,10 @@ class TrafficDataset:
         and the right part contains all datpoints on and after the cut point.
         """
         return TrafficDataset(ids=self.ids,
-                              values=self.values[:, :cut_point],
+                              values=self.values[:cut_point],
                               dates=self.dates[:cut_point]), \
                TrafficDataset(ids=self.ids,
-                              values=self.values[:, cut_point:],
+                              values=self.values[cut_point:],
                               dates=self.dates[cut_point:])
 
     def time_points(self):
