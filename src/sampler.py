@@ -1,3 +1,4 @@
+
 """
 Timeseries sampler
 """
@@ -19,7 +20,7 @@ class TimeseriesSampler:
         :param window_sampling_limit: Size of history the sampler should use.
         :param batch_size: Number of sampled windows.
         """
-        self.timeseries = [ts for ts in timeseries.T]
+        self.timeseries = [ts for ts in timeseries]
         self.window_sampling_limit = window_sampling_limit
         self.batch_size = batch_size
         self.insample_size = insample_size
