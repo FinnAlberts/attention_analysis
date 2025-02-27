@@ -62,7 +62,7 @@ class BaseEncoderDecoderTransformer(nn.Module):
 
     def forward(self, src_X: torch.Tensor, src_fX: torch.Tensor, tgt_X: torch.Tensor, tgt_fX: torch.Tensor, mask: torch.Tensor = None):
         """
-        Forward pass of the encoder-decoder transformer.
+        Forward pass of the encoder-decoder Transformer.
         :param src_X: covariates of source time series with shape (batch_size, seq_len, cov_d)
         :param src_fX: features of source time series with shape (batch_size, seq_len, feat_d)
         :param tgt_X: covariates of target time series with shape (batch_size, seq_len, cov_d)
