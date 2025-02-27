@@ -2,10 +2,5 @@
 
 In this repo, you can find our implementation and experimental results of several modifications to the attention mechanism. 
 
-## dataset download
-
-````bash
-python .\datasets\download.py build
-````
 
 
