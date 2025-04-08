@@ -11,6 +11,7 @@ This file contains several buidling blocks for Transformer-based architectures. 
 import torch
 from torch import nn
 from torch.nn import functional as F
+from src.Transformer.DistanceMetrics import euclidean
 
 import math
 
@@ -110,7 +111,65 @@ class MultiHeadAttention(nn.Module):
 
         return self.W_o(out)
 
+"""
+A modified attention mechanism which uses the original embedding as the query and key, after applying convolution. The values are also the original embedding, but are shifted by 1.
+"""   
+class SimplexAttention(nn.Module):
+    def __init__(self, distance_metric, conv_out_dim, kernel_size=3):
+        """
+        :param distance_metric: distance metric to use for the simplex attention mechanism
+        :param conv_out_dim: number of output channels for the convolutional layer
+        :param kernel_size: kernel size for the convolutional layer
+        """
+        super().__init__()
 
+        # We use a 1D convolution to group together a series of consecutive timesteps, which we use for the attention mechanism. 
+        self.conv = nn.LazyConv1d(out_channels=conv_out_dim, 
+                              kernel_size=kernel_size, 
+                              stride=1,  # Always stride 1 to ensure length of sequence is preserved
+                              padding=0) # Padding will be done manually to ensure causality
+
+        self.distance_metric = distance_metric
+
+    def forward(self, query: torch.Tensor, keys: torch.Tensor, vals: torch.Tensor, mask: torch.Tensor = None):
+        # Q, K, V: (batch_size, seq_len, dim)
+
+        # We need to permute the dimensions to (batch_size, dim, seq_len) for the convolution
+        query = query.permute(0, 2, 1)  # (batch_size, dim, seq_len)
+        keys = keys.permute(0, 2, 1)  # (batch_size, dim, seq_len)
+
+        # We pad on the left side to ensure that the convolution is causal (i.e. it only looks at past values)
+        query = F.pad(query, (self.conv.kernel_size[0] - 1, 0), mode='replicate')
+        keys = F.pad(keys, (self.conv.kernel_size[0] - 1, 0), mode='replicate')
+
+        query = self.conv(query)  # (batch_size, conv_out_dim, seq_len)
+        keys = self.conv(keys)  # (batch_size, conv_out_dim, seq_len)
+
+        # We need to permute the dimensions back to (batch_size, seq_len, conv_out_dim)
+        query = query.permute(0, 2, 1)  # (batch_size, seq_len, conv_out_dim)
+        keys = keys.permute(0, 2, 1)  # (batch_size, seq_len, conv_out_dim)
+
+        # Next for each query, we compute the distance to all keys
+        distances = self.distance_metric(query, keys)
+
+        # We negate the distances, because closer distances should have higher attention weights.
+        presoftmax = -distances
+
+        # Apply the mask to the presoftmax values
+        if mask is not None:
+            if mask.shape != presoftmax.shape:
+                raise ValueError(f"Expected mask shape {presoftmax.shape}, but got {mask.shape}")
+            presoftmax = presoftmax.masked_fill(mask == 0, float('-inf'))
+
+        # Shift the values by 1
+        shifted_vals = torch.roll(vals, shifts=1, dims=1)
+        shifted_vals[:, :1] = 0.0
+
+        self.attention_weight = F.softmax(presoftmax, dim=-1)
+
+        # out: (batch_size, seq_len, dim)
+        return torch.bmm(self.attention_weight, shifted_vals)
+    
 class TransformerEncoderBlock(nn.Module):
     def __init__(self,
                  n_heads=8,
@@ -201,5 +260,45 @@ class TransformerDecoderBlock(nn.Module):
             X = self.norm1(X + self.mha1(X, X, X, mask))
             X = self.norm2(X + self.mha2(X, enc_outputs, enc_outputs))
             X = self.norm3(X + self.ffn(X))
+
+        return self.dropout(X)
+
+"""
+A modified Transformer encoder block which uses the Simplex attention mechanism.
+"""
+class SimplexTransformerEncoderBlock(nn.Module):
+    def __init__(self,
+                 n_out=512,
+                 ffn_n_hidden=2048,
+                 dropout=0.1,
+                 norm_first=True,
+                 distance_metric=euclidean,
+                 conv_out_dim=64,
+                 kernel_size=3):
+        """
+        :param n_out: dimensionality of output
+        :param ffn_n_hidden: hidden dimension of feedforward network
+        :param dropout: dropout rate
+        :param norm_first: whether to apply layer normalization before attention layer or after
+        :param distance_metric: distance metric to use for the simplex attention mechanism
+        :param conv_out_dim: number of output channels for the convolutional layer
+        :param kernel_size: kernel size for the convolutional layer
+        """
+        super().__init__()
+        self.norm_first = norm_first
+        self.attention = SimplexAttention(distance_metric, conv_out_dim, kernel_size)
+        self.norm1 = nn.LayerNorm(n_out)
+        self.dropout = nn.Dropout(dropout)
+        self.ffn = nn.Sequential(nn.LazyLinear(ffn_n_hidden), nn.ReLU(), nn.LazyLinear(n_out))
+        self.norm2 = nn.LayerNorm(n_out)
+
+    def forward(self, X: torch.Tensor, mask: torch.Tensor = None):
+        if self.norm_first:
+            X = self.norm1(X)
+            X = X + self.attention(X, X, X, mask)
+            X = X + self.ffn(self.norm2(X))
+        else:
+            X = self.norm1(X + self.attention(X, X, X, mask))
+            X = self.norm2(X + self.ffn(X))
 
         return self.dropout(X)

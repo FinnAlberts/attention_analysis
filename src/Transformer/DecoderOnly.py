@@ -3,6 +3,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from src.Transformer import TransformerModules as TB
+from src.Transformer.DistanceMetrics import euclidean
 import copy
 
 """
@@ -36,6 +37,45 @@ class BaseDecoderOnlyTransformer(nn.Module):
 
         decoder_block = TB.TransformerEncoderBlock(n_heads=n_heads, n_hidden=n_hidden, n_out=emb_size,
                                                    ffn_n_hidden=ffn_n_hidden, _attention=_attention, norm_first=norm_first)
+        self.transformer_blocks = nn.ModuleList(
+            [copy.deepcopy(decoder_block) for _ in range(num_layers)]
+        )
+
+    def forward(self, X: torch.Tensor, fX: torch.Tensor, mask: torch.Tensor = None):
+        # covariates X:  (batch_size, seq_len, cov_d)
+        # features fX:   (batch_size, seq_len, feat_d)
+
+        # (batch_size, seq_len, cov_d + feat_d)
+        Y = torch.cat([X, fX], dim=-1)
+
+        # embedding: (batch_size, seq_len, cov_d + feat_d) -> (batch_size, seq_len, emb_size)
+        # positional embedding: (seq_len) -> (seq_len, emb_size)
+        Y = self.pos_enc(self.emb(Y))
+
+        # through decoder blocks with same mask shape (seq_len, seq_len)
+        for block in self.transformer_blocks:
+            Y = block(Y, mask=mask)
+
+        # output shape: (batch_size, seq_len, emb_size)
+        return Y
+    
+class SimplexDecoderOnlyTransformer(nn.Module):
+    def __init__(self,
+                 d_in=2,
+                 emb_size=512,
+                 n_hidden=64,
+                 ffn_n_hidden=2048,
+                 num_layers=3,
+                 norm_first=True,
+                 distance_metric=euclidean,
+                 conv_out_dim=64,
+                 kernel_size=3):
+        super().__init__()
+        self.emb = nn.Linear(d_in, emb_size)
+        self.pos_enc = TB.PositionalEncoding(emb_size)
+
+        decoder_block = TB.SimplexTransformerEncoderBlock(n_out=emb_size, ffn_n_hidden=ffn_n_hidden, norm_first=norm_first,
+                                                          distance_metric=distance_metric, conv_out_dim=conv_out_dim, kernel_size=kernel_size)
         self.transformer_blocks = nn.ModuleList(
             [copy.deepcopy(decoder_block) for _ in range(num_layers)]
         )
