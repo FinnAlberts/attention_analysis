@@ -157,11 +157,13 @@ class SimplexAttention(nn.Module):
 
         # Apply the mask to the presoftmax values
         if mask is not None:
-            if mask.shape != presoftmax.shape:
-                raise ValueError(f"Expected mask shape {presoftmax.shape}, but got {mask.shape}")
             presoftmax = presoftmax.masked_fill(mask == 0, float('-inf'))
 
-        # Shift the values by 1
+        # Apply attention weights to values from the previous time step.
+        # This shifts the focus: use similarity of current/past local patterns (Q/K)
+        # to weight the importance of the *value at that similar past time step*
+        # for constructing the current output.
+        # shift values by 1.
         shifted_vals = torch.roll(vals, shifts=1, dims=1)
         shifted_vals[:, :1] = 0.0
 
