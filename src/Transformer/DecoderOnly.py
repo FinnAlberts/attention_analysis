@@ -59,23 +59,42 @@ class BaseDecoderOnlyTransformer(nn.Module):
         # output shape: (batch_size, seq_len, emb_size)
         return Y
     
-class SimplexDecoderOnlyTransformer(nn.Module):
+"""
+Base class for the autoregressive decoder-only Transformer model using custom Simplex Attention.
+Uses naive linear layer for embedding.
+"""
+class BaseSimplexDecoderOnlyTransformer(nn.Module):
     def __init__(self,
                  d_in=2,
                  emb_size=512,
-                 n_hidden=64,
                  ffn_n_hidden=2048,
                  num_layers=3,
                  norm_first=True,
                  distance_metric=euclidean,
                  conv_out_dim=64,
                  kernel_size=3):
+        """
+        :param d_in: total number of input features (N timeseries + M covariates)
+        :param emb_size: embedding size of d_in (d_model), also the output size of blocks
+        :param ffn_n_hidden: number of hidden units in point-wise FFN
+        :param num_layers: number of Simplex attention decoder layers
+        :param norm_first: whether to apply layer normalization before or after attention
+        :param distance_metric: distance metric function for SimplexAttention
+        :param conv_out_dim: output dimension of the convolution within SimplexAttention
+        :param kernel_size: kernel size for the convolution within SimplexAttention
+        """
         super().__init__()
         self.emb = nn.Linear(d_in, emb_size)
         self.pos_enc = TB.PositionalEncoding(emb_size)
 
-        decoder_block = TB.SimplexTransformerEncoderBlock(n_out=emb_size, ffn_n_hidden=ffn_n_hidden, norm_first=norm_first,
-                                                          distance_metric=distance_metric, conv_out_dim=conv_out_dim, kernel_size=kernel_size)
+        decoder_block = TB.SimplexTransformerEncoderBlock(
+            n_out=emb_size, # Output of the block should match embedding size
+            ffn_n_hidden=ffn_n_hidden,
+            norm_first=norm_first,
+            distance_metric=distance_metric,
+            conv_out_dim=conv_out_dim,
+            kernel_size=kernel_size
+        )
         self.transformer_blocks = nn.ModuleList(
             [copy.deepcopy(decoder_block) for _ in range(num_layers)]
         )
@@ -98,6 +117,49 @@ class SimplexDecoderOnlyTransformer(nn.Module):
         # output shape: (batch_size, seq_len, emb_size)
         return Y
 
+"""
+Decoder-only Transformer model using Simplex Attention that predicts d_out values for each step.
+Usable in experiments similarly to PointDecoderOnlyTransformer.
+"""
+class PointSimplexDecoderOnlyTransformer(BaseSimplexDecoderOnlyTransformer):
+    def __init__(self,
+                 d_in=2,
+                 d_out=1,
+                 emb_size=512,
+                 ffn_n_hidden=2048,
+                 num_layers=3,
+                 norm_first=True,
+                 distance_metric=euclidean,
+                 conv_out_dim=64,
+                 kernel_size=3):
+        """
+        :param d_in: total number of input features (N timeseries + M covariates)
+        :param emb_size: embedding size of d_in (d_model), also the output size of blocks
+        :param ffn_n_hidden: number of hidden units in point-wise FFN
+        :param num_layers: number of Simplex attention decoder layers
+        :param norm_first: whether to apply layer normalization before or after attention
+        :param distance_metric: distance metric function for SimplexAttention
+        :param conv_out_dim: output dimension of the convolution within SimplexAttention
+        :param kernel_size: kernel size for the convolution within SimplexAttention
+        """
+        super().__init__(
+            d_in=d_in,
+            emb_size=emb_size,
+            ffn_n_hidden=ffn_n_hidden,
+            num_layers=num_layers,
+            norm_first=norm_first,
+            distance_metric=distance_metric,
+            conv_out_dim=conv_out_dim,
+            kernel_size=kernel_size
+        )
+        self.fc = nn.Linear(emb_size, d_out)
+
+    def forward(self, X: torch.Tensor, fX: torch.Tensor, mask: torch.Tensor = None):
+        Y = super().forward(X, fX, mask)
+
+        # dense layer to project to d_out dimsy
+        # (batch_size, seq_len, emb_size) -> (batch_size, seq_len, d_out)
+        return self.fc(Y)
 
 """
 Decoder-only Transformer model that predicts d_out values for each step.
