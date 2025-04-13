@@ -115,10 +115,11 @@ class MultiHeadAttention(nn.Module):
 A modified attention mechanism which uses the original embedding as the query and key, after applying convolution. The values are also the original embedding, but are shifted by 1.
 """   
 class SimplexAttention(nn.Module):
-    def __init__(self, distance_metric, conv_out_dim, kernel_size=3):
+    def __init__(self, distance_metric, conv_out_dim, n_heads=1, kernel_size=3):
         """
         :param distance_metric: distance metric to use for the simplex attention mechanism
         :param conv_out_dim: number of output channels for the convolutional layer
+        :param n_heads: number of attention heads
         :param kernel_size: kernel size for the convolutional layer
         """
         super().__init__()
@@ -130,47 +131,65 @@ class SimplexAttention(nn.Module):
                               padding=0) # Padding will be done manually to ensure causality
 
         self.distance_metric = distance_metric
+        self.n_heads = n_heads
+        self.conv_out_dim = conv_out_dim
 
     def forward(self, query: torch.Tensor, keys: torch.Tensor, vals: torch.Tensor, mask: torch.Tensor = None):
         # Q, K, V: (batch_size, seq_len, dim)
+        batch_size, seq_len, dim = query.shape
+        head_dim = dim // self.n_heads
 
-        # We need to permute the dimensions to (batch_size, dim, seq_len) for the convolution
-        query = query.permute(0, 2, 1)  # (batch_size, dim, seq_len)
-        keys = keys.permute(0, 2, 1)  # (batch_size, dim, seq_len)
+        # We split the input into n_heads heads, and reshape the input to (batch_size, n_heads, seq_len, head_dim)
+        query = query.reshape(batch_size, seq_len, self.n_heads, head_dim).permute(0, 2, 1, 3)  # (batch_size, n_heads, seq_len, head_dim)
+        keys = keys.reshape(batch_size, seq_len, self.n_heads, head_dim).permute(0, 2, 1, 3)  # (batch_size, n_heads, seq_len, head_dim)
+
+        # We need to reshape the input to (batch_size * n_heads, seq_len, head_dim) for the convolution
+        query = query.reshape(batch_size * self.n_heads, seq_len, head_dim)  # (batch_size * n_heads, seq_len, head_dim)
+        keys = keys.reshape(batch_size * self.n_heads, seq_len, head_dim)  # (batch_size * n_heads, seq_len, head_dim)
+
+        # We need to permute the dimensions to (batch_size * n_heads, head_dim, seq_len) for the convolution
+        query = query.permute(0, 2, 1)  # (batch_size * n_heads, head_dim, seq_len)
+        keys = keys.permute(0, 2, 1)  # (batch_size * n_heads, head_dim, seq_len)
 
         # We pad on the left side to ensure that the convolution is causal (i.e. it only looks at past values)
         query = F.pad(query, (self.conv.kernel_size[0] - 1, 0), mode='replicate')
         keys = F.pad(keys, (self.conv.kernel_size[0] - 1, 0), mode='replicate')
 
-        query = self.conv(query)  # (batch_size, conv_out_dim, seq_len)
-        keys = self.conv(keys)  # (batch_size, conv_out_dim, seq_len)
+        # Apply the convolution to the query and keys
+        query = self.conv(query)  # (batch_size * n_heads, conv_out_dim, seq_len)
+        keys = self.conv(keys)  # (batch_size * n_heads, conv_out_dim, seq_len)
 
-        # We need to permute the dimensions back to (batch_size, seq_len, conv_out_dim)
-        query = query.permute(0, 2, 1)  # (batch_size, seq_len, conv_out_dim)
-        keys = keys.permute(0, 2, 1)  # (batch_size, seq_len, conv_out_dim)
+        # We need to permute the dimensions back to (batch_size * n_heads, seq_len, conv_out_dim)
+        query = query.permute(0, 2, 1)  # (batch_size * n_heads, seq_len, conv_out_dim)
+        keys = keys.permute(0, 2, 1)  # (batch_size * n_heads, seq_len, conv_out_dim)
 
         # Next for each query, we compute the distance to all keys
-        distances = self.distance_metric(query, keys)
+        distances = self.distance_metric(query, keys) # (batch_size * n_heads, seq_len, seq_len)
 
         # We negate the distances, because closer distances should have higher attention weights.
-        presoftmax = -distances
+        presoftmax = -distances # (batch_size * n_heads, seq_len, seq_len)
 
         # Apply the mask to the presoftmax values
         if mask is not None:
             presoftmax = presoftmax.masked_fill(mask == 0, float('-inf'))
 
-        # Apply attention weights to values from the previous time step.
-        # This shifts the focus: use similarity of current/past local patterns (Q/K)
-        # to weight the importance of the *value at that similar past time step*
-        # for constructing the current output.
-        # shift values by 1.
-        shifted_vals = torch.roll(vals, shifts=1, dims=1)
-        shifted_vals[:, :1] = 0.0
+        self.attention_weight = F.softmax(presoftmax, dim=-1) # (batch_size * n_heads, seq_len, seq_len)
 
-        self.attention_weight = F.softmax(presoftmax, dim=-1)
+        # We shift the attention matrix by 1 to the right, so that the attention is put on the effect of the previous timestep
+        # We do this by rolling the attention matrix by 1 to the right
+        self.attention_weight = torch.roll(self.attention_weight, shifts=1, dims=-1)  # (batch_size * n_heads, seq_len, seq_len)
 
-        # out: (batch_size, seq_len, dim)
-        return torch.bmm(self.attention_weight, shifted_vals)
+        # We also split values into n_heads
+        vals = vals.reshape(batch_size, seq_len, self.n_heads, head_dim).permute(0, 2, 1, 3)  # (batch_size, n_heads, seq_len, head_dim)
+        vals = vals.reshape(batch_size * self.n_heads, seq_len, head_dim)  # (batch_size * n_heads, seq_len, head_dim)
+
+        # Multiply the attention weights with the shifted values
+        out = torch.bmm(self.attention_weight, vals)  # (batch_size * n_heads, seq_len, head_dim)
+        out = out.reshape(batch_size, self.n_heads, seq_len, head_dim)  # (batch_size, n_heads, seq_len, head_dim)
+        out = out.permute(0, 2, 1, 3)  # (batch_size, seq_len, n_heads, head_dim)
+        out = out.reshape(batch_size, seq_len, dim) # (batch_size, seq_len, dim)
+        
+        return out
     
 class TransformerEncoderBlock(nn.Module):
     def __init__(self,
@@ -271,6 +290,7 @@ A modified Transformer encoder block which uses the Simplex attention mechanism.
 class SimplexTransformerEncoderBlock(nn.Module):
     def __init__(self,
                  n_out=512,
+                 n_heads=1,
                  ffn_n_hidden=2048,
                  dropout=0.1,
                  norm_first=True,
@@ -279,6 +299,7 @@ class SimplexTransformerEncoderBlock(nn.Module):
                  kernel_size=3):
         """
         :param n_out: dimensionality of output
+        :param n_heads: number of attention heads
         :param ffn_n_hidden: hidden dimension of feedforward network
         :param dropout: dropout rate
         :param norm_first: whether to apply layer normalization before attention layer or after
@@ -288,7 +309,7 @@ class SimplexTransformerEncoderBlock(nn.Module):
         """
         super().__init__()
         self.norm_first = norm_first
-        self.attention = SimplexAttention(distance_metric, conv_out_dim, kernel_size)
+        self.attention = SimplexAttention(distance_metric, conv_out_dim=conv_out_dim, n_heads=n_heads, kernel_size=kernel_size)
         self.norm1 = nn.LayerNorm(n_out)
         self.dropout = nn.Dropout(dropout)
         self.ffn = nn.Sequential(nn.LazyLinear(ffn_n_hidden), nn.ReLU(), nn.LazyLinear(n_out))
