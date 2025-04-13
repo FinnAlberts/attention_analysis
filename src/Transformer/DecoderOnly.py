@@ -72,7 +72,8 @@ class BaseSimplexDecoderOnlyTransformer(nn.Module):
                  norm_first=True,
                  distance_metric=euclidean,
                  conv_out_dim=64,
-                 kernel_size=3):
+                 kernel_size=3,
+                 n_heads=1):
         """
         :param d_in: total number of input features (N timeseries + M covariates)
         :param emb_size: embedding size of d_in (d_model), also the output size of blocks
@@ -82,6 +83,7 @@ class BaseSimplexDecoderOnlyTransformer(nn.Module):
         :param distance_metric: distance metric function for SimplexAttention
         :param conv_out_dim: output dimension of the convolution within SimplexAttention
         :param kernel_size: kernel size for the convolution within SimplexAttention
+        :param n_heads: number of heads
         """
         super().__init__()
         self.emb = nn.Linear(d_in, emb_size)
@@ -93,7 +95,8 @@ class BaseSimplexDecoderOnlyTransformer(nn.Module):
             norm_first=norm_first,
             distance_metric=distance_metric,
             conv_out_dim=conv_out_dim,
-            kernel_size=kernel_size
+            kernel_size=kernel_size,
+            n_heads=n_heads
         )
         self.transformer_blocks = nn.ModuleList(
             [copy.deepcopy(decoder_block) for _ in range(num_layers)]
@@ -131,7 +134,8 @@ class PointSimplexDecoderOnlyTransformer(BaseSimplexDecoderOnlyTransformer):
                  norm_first=True,
                  distance_metric=euclidean,
                  conv_out_dim=64,
-                 kernel_size=3):
+                 kernel_size=3,
+                 n_heads=1):
         """
         :param d_in: total number of input features (N timeseries + M covariates)
         :param emb_size: embedding size of d_in (d_model), also the output size of blocks
@@ -141,6 +145,7 @@ class PointSimplexDecoderOnlyTransformer(BaseSimplexDecoderOnlyTransformer):
         :param distance_metric: distance metric function for SimplexAttention
         :param conv_out_dim: output dimension of the convolution within SimplexAttention
         :param kernel_size: kernel size for the convolution within SimplexAttention
+        :param n_heads: number of heads
         """
         super().__init__(
             d_in=d_in,
@@ -150,14 +155,15 @@ class PointSimplexDecoderOnlyTransformer(BaseSimplexDecoderOnlyTransformer):
             norm_first=norm_first,
             distance_metric=distance_metric,
             conv_out_dim=conv_out_dim,
-            kernel_size=kernel_size
+            kernel_size=kernel_size,
+            n_heads=n_heads
         )
         self.fc = nn.Linear(emb_size, d_out)
 
     def forward(self, X: torch.Tensor, fX: torch.Tensor, mask: torch.Tensor = None):
         Y = super().forward(X, fX, mask)
 
-        # dense layer to project to d_out dimsy
+        # dense layer to project to d_out dims
         # (batch_size, seq_len, emb_size) -> (batch_size, seq_len, d_out)
         return self.fc(Y)
 
