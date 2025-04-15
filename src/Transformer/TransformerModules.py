@@ -184,8 +184,11 @@ class SimplexAttention(nn.Module):
         # Next for each query, we compute the distance to all keys
         distances = self.distance_metric(query, keys) # (batch_size * n_heads, seq_len, seq_len)
 
-        # We negate the distances, because closer distances should have higher attention weights.
-        presoftmax = -distances # (batch_size * n_heads, seq_len, seq_len)
+        # Mask out self-distances (i.e. distances to itself) by setting them to infinity
+        distances = distances.masked_fill(torch.eye(seq_len, device=distances.device).bool(), float('inf')) # (batch_size * n_heads, seq_len, seq_len)
+
+        # We apply the inverse of the distances to get the attention weights (i.e. the closer the keys are to the query, the higher the attention weight)
+        presoftmax = 1/(distances + 1e-3) # (batch_size * n_heads, seq_len, seq_len)
 
         # Apply the mask to the presoftmax values
         if mask is not None:
