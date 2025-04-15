@@ -189,9 +189,10 @@ class SimplexAttention(nn.Module):
 
         # Apply the mask to the presoftmax values
         if mask is not None:
-            if mask.dim() == 2:
-                mask = mask.unsqueeze(0)
-                mask = mask.expand(batch_size, -1, -1)
+            if mask.dim() == 2: # If mask is (seq_len, seq_len), we need to expand it to (batch_size, seq_len, seq_len)
+                mask = mask.unsqueeze(0)  # (1, seq_len, seq_len)
+                mask = mask.expand(batch_size, -1, -1)  # (batch_size, seq_len, seq_len)
+                
             # mask: (batch_size, seq_len, seq_len), we need to expand it to (batch_size, n_heads, seq_len, seq_len)
             mask = mask.unsqueeze(1)  # (batch_size, 1, seq_len, seq_len)
             mask = mask.expand(-1, self.n_heads, -1, -1)  # (batch_size, n_heads, seq_len, seq_len)
