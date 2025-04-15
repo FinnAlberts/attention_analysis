@@ -125,10 +125,13 @@ class SimplexAttention(nn.Module):
         super().__init__()
 
         # We use a 1D convolution to group together a series of consecutive timesteps, which we use for the attention mechanism. 
-        self.conv = nn.LazyConv1d(out_channels=conv_out_dim, 
-                              kernel_size=kernel_size, 
-                              stride=1,  # Always stride 1 to ensure length of sequence is preserved
-                              padding=0) # Padding will be done manually to ensure causality
+        self.conv = nn.ModuleList([
+                    nn.LazyConv1d(out_channels=conv_out_dim, 
+                          kernel_size=kernel_size, 
+                          stride=1,  # Always stride 1 to ensure length of sequence is preserved
+                          padding=0) # Padding will be done manually to ensure causality
+                          for _ in range(n_heads)
+                    ])
 
         self.distance_metric = distance_metric
         self.n_heads = n_heads
@@ -143,25 +146,40 @@ class SimplexAttention(nn.Module):
         query = query.reshape(batch_size, seq_len, self.n_heads, head_dim).permute(0, 2, 1, 3)  # (batch_size, n_heads, seq_len, head_dim)
         keys = keys.reshape(batch_size, seq_len, self.n_heads, head_dim).permute(0, 2, 1, 3)  # (batch_size, n_heads, seq_len, head_dim)
 
-        # We need to reshape the input to (batch_size * n_heads, seq_len, head_dim) for the convolution
-        query = query.reshape(batch_size * self.n_heads, seq_len, head_dim)  # (batch_size * n_heads, seq_len, head_dim)
-        keys = keys.reshape(batch_size * self.n_heads, seq_len, head_dim)  # (batch_size * n_heads, seq_len, head_dim)
 
-        # We need to permute the dimensions to (batch_size * n_heads, head_dim, seq_len) for the convolution
-        query = query.permute(0, 2, 1)  # (batch_size * n_heads, head_dim, seq_len)
-        keys = keys.permute(0, 2, 1)  # (batch_size * n_heads, head_dim, seq_len)
+        query_out = []
+        keys_out = []
+        for i in range(self.n_heads):
+            query_head = query[:, i, :, :].reshape(batch_size, seq_len, head_dim)  # (batch_size, seq_len, head_dim)
+            keys_head = keys[:, i, :, :].reshape(batch_size, seq_len, head_dim)  # (batch_size, seq_len, head_dim)
 
-        # We pad on the left side to ensure that the convolution is causal (i.e. it only looks at past values)
-        query = F.pad(query, (self.conv.kernel_size[0] - 1, 0), mode='replicate')
-        keys = F.pad(keys, (self.conv.kernel_size[0] - 1, 0), mode='replicate')
+            # We need to permute the dimensions to (batch_size, head_dim, seq_len) for the convolution
+            query_head = query_head.permute(0, 2, 1)  # (batch_size, head_dim, seq_len)
+            keys_head = keys_head.permute(0, 2, 1)  # (batch_size, head_dim, seq_len)
 
-        # Apply the convolution to the query and keys
-        query = self.conv(query)  # (batch_size * n_heads, conv_out_dim, seq_len)
-        keys = self.conv(keys)  # (batch_size * n_heads, conv_out_dim, seq_len)
+            # We pad on the left side to ensure that the convolution is causal (i.e. it only looks at past values)
+            query_head = F.pad(query_head, (self.conv[i].kernel_size[0] - 1, 0), mode='replicate')
+            keys_head = F.pad(keys_head, (self.conv[i].kernel_size[0] - 1, 0), mode='replicate')
 
-        # We need to permute the dimensions back to (batch_size * n_heads, seq_len, conv_out_dim)
-        query = query.permute(0, 2, 1)  # (batch_size * n_heads, seq_len, conv_out_dim)
-        keys = keys.permute(0, 2, 1)  # (batch_size * n_heads, seq_len, conv_out_dim)
+            # Apply the convolution to the query and keys
+            query_head = self.conv[i](query_head)  # (batch_size, conv_out_dim, seq_len)
+            keys_head = self.conv[i](keys_head)  # (batch_size, conv_out_dim, seq_len)
+
+            # We need to permute the dimensions back to (batch_size, seq_len, conv_out_dim)
+            query_head = query_head.permute(0, 2, 1)  # (batch_size, seq_len, conv_out_dim)
+            keys_head = keys_head.permute(0, 2, 1)  # (batch_size, seq_len, conv_out_dim)
+
+            # Append the query and keys to the list of queries and keys
+            query_out.append(query_head)
+            keys_out.append(keys_head)
+
+        # We stack the queries and keys to get the final query and keys
+        query = torch.stack(query_out, dim=1)  # (batch_size, n_heads, seq_len, conv_out_dim)
+        keys = torch.stack(keys_out, dim=1)  # (batch_size, n_heads, seq_len, conv_out_dim)
+
+        # We need to reshape the queries and keys to (batch_size * n_heads, seq_len, conv_out_dim)
+        query = query.reshape(batch_size * self.n_heads, seq_len, self.conv_out_dim)  # (batch_size * n_heads, seq_len, conv_out_dim)
+        keys = keys.reshape(batch_size * self.n_heads, seq_len, self.conv_out_dim)  # (batch_size * n_heads, seq_len, conv_out_dim)
 
         # Next for each query, we compute the distance to all keys
         distances = self.distance_metric(query, keys) # (batch_size * n_heads, seq_len, seq_len)
@@ -171,6 +189,11 @@ class SimplexAttention(nn.Module):
 
         # Apply the mask to the presoftmax values
         if mask is not None:
+            # mask: (batch_size, seq_len, seq_len), we need to expand it to (batch_size, n_heads, seq_len, seq_len)
+            mask = mask.unsqueeze(1)  # (batch_size, 1, seq_len, seq_len)
+            mask = mask.expand(-1, self.n_heads, -1, -1)  # (batch_size, n_heads, seq_len, seq_len)
+            mask = mask.reshape(batch_size * self.n_heads, seq_len, seq_len)
+
             presoftmax = presoftmax.masked_fill(mask == 0, float('-inf'))
 
         self.attention_weight = F.softmax(presoftmax, dim=-1) # (batch_size * n_heads, seq_len, seq_len)
