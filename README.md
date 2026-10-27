@@ -11,7 +11,7 @@ The article details the research questions, methods, and findings of this projec
 
 If you use this code in your work, please consider citing the article as follows:
 ```
-@article{seducedTranformerHumbledSimplex,
+@report{seducedTranformerHumbledSimplex,
   title={Seduced by the Transformer, Humbled by Simplex: Revisiting Attention for Time Series Forecasting},
   author={Alberts, Finn and Vosse, Ewoud and de Weerd, Arjan},
   year={2025},
